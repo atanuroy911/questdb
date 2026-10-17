@@ -1,0 +1,115 @@
+# Testing PGWire with fixed versions of clients
+# This is meant to be run on every PR to catch regressions introduced by QuestDB code changes
+# 4d1965c9142484e48d40c19de54b5cba84953a06 is the same as @v1, except it's guaranteed to be immutable
+# even if the original tag is moved or deleted
+
+name: Modified PGWire - Stable clients
+jobs:
+  build:
+    runs-on:
+    - self-hosted
+    - optcd
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-build.csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/questdb/questdb', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - uses: actions/checkout@v5
+    - run: touch optcd-3.txt
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '25'
+        cache: maven
+    - run: touch optcd-4.txt
+    - name: Detect local client profile
+      id: client
+      uses: ./.github/actions/detect-local-client
+    - run: touch optcd-5.txt
+    - name: Build distribution
+      run: mvn -B clean install -Dmaven.test.skip=true -Pbuild-binaries -pl '!benchmarks'
+        ${{ steps.client.outputs.client_profile }}
+    - run: touch optcd-6.txt
+    - name: Unpack distribution
+      run: tar -xzf core/target/questdb-*-no-jre-bin.tar.gz
+    - run: touch optcd-7.txt
+    - name: Start QuestDB
+      run: ./questdb-*bin/questdb.sh start
+    - run: touch optcd-8.txt
+    - name: Setup PHP
+      run: |-
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt update
+        sudo apt install php php-pdo php-pgsql composer -y
+    - run: touch optcd-9.txt
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@4d1965c9142484e48d40c19de54b5cba84953a06
+      with:
+        toolchain: 1.90.0
+        cache-workspaces: compat/src/test/rust/scenarios
+    - run: touch optcd-10.txt
+    - name: Setup golang toolchain
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        cache-dependency-path: compat/src/test/golang/go.sum
+    - run: touch optcd-11.txt
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 9.0.x
+    - run: touch optcd-12.txt
+    - name: Setup Python version
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.8
+    - run: touch optcd-13.txt
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: '22'
+    - run: touch optcd-14.txt
+    - name: Run all scenarios
+      run: |-
+        ./compat/src/test/scenarios_stable.sh
+    - run: touch optcd-15.txt
+    - name: Stop QuestDB
+      run: ./questdb-*bin/questdb.sh stop
+    - run: touch optcd-16.txt
+    - name: Upload logs
+      uses: actions/upload-artifact@v6
+      with:
+        path: ~/.questdb/log/*
+        name: logs
+        retention-days: 5
+    - run: touch optcd-17.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-build
+        path: /home/runner/inotifywait-log-build.csv
+    name: build
+'on':
+- push
+- workflow_dispatch
